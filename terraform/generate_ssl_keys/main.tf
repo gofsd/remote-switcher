@@ -13,9 +13,9 @@ resource "tls_self_signed_cert" "cm_ca_cert" {
   is_ca_certificate = true
 
   subject {
-    country             = "IN"
-    province            = "Mahrashatra"
-    locality            = "Mumbai"
+    country             = "UA"
+    province            = "Kyiv"
+    locality            = "Kyiv"
     common_name         = "Cloud Manthan Root CA"
     organization        = "Cloud Manthan Software Solutions Pvt Ltd."
     organizational_unit = "Cloud Manthan Root Certification Auhtority"
