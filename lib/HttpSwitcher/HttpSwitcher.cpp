@@ -29,21 +29,13 @@ String generateId()
 
 void setPinFromStrs(String, String);
 void setPin(int, bool);
-// void getAll();
 void handleBody(AsyncWebServerRequest, uint8_t, size_t, size_t, size_t);
 bool getRebootStatus();
 void buildJsonFromStructure(JsonObject &jsonObj, const String &path);
 
-String isTrueStr(bool);
-// void buildJsonFromStructure(JsonObject, String);
-
 AsyncWebServer server(80);
 
-const int kNetworkDelay = 1000;
-const int kNetworkTimeout = 30 * 1000;
-char result[1024]; // array to hold the result.
 bool shouldReboot = false;
-boolean toggle = false;
 
 void notFound(AsyncWebServerRequest *request)
 {
@@ -162,7 +154,7 @@ void initState()
   buildJsonFromStructure(doc, "/state");
   if (jsonData["settings"]["is_sta"].isNull())
   {
-    jsonData["settings"]["is_sta"] = true;
+    jsonData["settings"]["is_sta"] = false;
   }
   if (jsonData["settings"]["sta_ssid"].isNull())
   {
@@ -188,7 +180,7 @@ void initState()
 
 void configureNetwork()
 {
-  if (!jsonData["settings"]["is_sta"].as<bool>())
+  if (jsonData["settings"]["is_sta"].as<bool>())
   {
     WiFi.mode(WIFI_STA);
     WiFi.begin(jsonData["settings"]["sta_ssid"].as<String>(), jsonData["settings"]["sta_password"].as<String>());
@@ -259,6 +251,7 @@ void onRequestBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, si
       break;
     }
     jsonBodyReqData[request->url()][methodName] = doc;
+    serializeJson(doc, Serial);
   }
 }
 
@@ -369,7 +362,7 @@ void start()
             {
               DynamicJsonDocument doc(512);
               doc = jsonBodyReqData[request->url()][request->method()];
-              serializeJson(doc, Serial);
+              serializeJson(jsonBodyReqData, Serial);
               int pin = doc["pin"].as<int>();
               String mode = doc["mode"];
               int value = doc["value"].as<int>();
