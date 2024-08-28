@@ -18,6 +18,7 @@ std::map<int, String> cronMap;
 const size_t capacity = 1024;
 
 DynamicJsonDocument jsonData(capacity);
+DynamicJsonDocument jsonBodyReqData(capacity);
 
 CronId id;
 
@@ -37,22 +38,11 @@ String isTrueStr(bool);
 // void buildJsonFromStructure(JsonObject, String);
 
 AsyncWebServer server(80);
-const char *host = "192.168.4.1";
-const char *port = "8080";
-const char *TRUE = "true";
-const char *FALSE = "false";
-// const char* ssid = "netis_581C6C";
-const char *ssid = "esp8266";
-// const char* password = "password2115";
-const char *password = "Password1";
+
 const int kNetworkDelay = 1000;
 const int kNetworkTimeout = 30 * 1000;
 char result[1024]; // array to hold the result.
 bool shouldReboot = false;
-
-
-
-
 boolean toggle = false;
 
 void notFound(AsyncWebServerRequest *request)
@@ -170,38 +160,51 @@ void initState()
 {
   JsonObject doc = jsonData.to<JsonObject>();
   buildJsonFromStructure(doc, "/state");
+  if (jsonData["settings"]["is_sta"].isNull())
+  {
+    jsonData["settings"]["is_sta"] = true;
+  }
+  if (jsonData["settings"]["sta_ssid"].isNull())
+  {
+    jsonData["settings"]["sta_ssid"] = "ESP32";
+  }
+  if (jsonData["settings"]["sta_password"].isNull())
+  {
+    jsonData["settings"]["sta_password"] = "Password1";
+  }
+  if (jsonData["settings"]["ap_ssid"].isNull())
+  {
+    jsonData["settings"]["ap_ssid"] = "AP_FOR_ESP32";
+  }
+  if (jsonData["settings"]["ap_password"].isNull())
+  {
+    jsonData["settings"]["ap_password"] = "Password1";
+  }
+  if (jsonData["settings"]["ap_connect_retry"].isNull())
+  {
+    jsonData["settings"]["ap_connect_retry"] = 3;
+  }
 }
 
 void configureNetwork()
 {
-  if (!jsonData["settings"]["isAP"].as<bool>())
+  if (!jsonData["settings"]["is_sta"].as<bool>())
   {
-    Serial.printf("From memory: ");
-    Serial.println("esp32");
-    Serial.println("Password1");
     WiFi.mode(WIFI_STA);
-    WiFi.begin("esp32", "Password1");
+    WiFi.begin(jsonData["settings"]["sta_ssid"].as<String>(), jsonData["settings"]["sta_password"].as<String>());
   }
   else
   {
-    Serial.println("EEPROM size have been changed or there are no stored data in memory");
-  }
-
-  if (WiFi.waitForConnectResult() != WL_CONNECTED)
-  {
-    WiFi.softAP("esp32", "Password1");
-
     if (WiFi.waitForConnectResult() != WL_CONNECTED)
     {
-      delay(1000);
-      Serial.printf("TEST");
+      WiFi.softAP(jsonData["settings"]["ap_ssid"].as<String>(), jsonData["settings"]["ap_password"].as<String>());
+
+      if (WiFi.waitForConnectResult() != WL_CONNECTED)
+      {
+        delay(1000);
+      }
     }
   }
-  IPAddress IP = WiFi.softAPIP();
-
-  Serial.print("IP Address: ");
-  Serial.println(IP);
-  Serial.println(WiFi.localIP());
 }
 
 void init()
@@ -215,77 +218,90 @@ void init()
   configureNetwork();
 }
 
-void processCronRequestBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+void onRequestBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
-  StaticJsonDocument<512> doc;
-  DeserializationError error = deserializeJson(doc, data);
+  // Static buffer for accumulating the body
+  static String requestBody;
 
-  if (error)
+  // Append received data to the requestBody
+  requestBody.concat((const char *)data, len);
+
+  // When the entire body is received
+  if (index + len == total) {
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, requestBody);
+
+    if (error)
+    {
+      request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+      return;
+    }
+    String methodName;
+    switch (request->method())
+    {
+    case HTTP_GET:
+      methodName = "GET";
+      break;
+    case HTTP_POST:
+      methodName = "POST";
+      break;
+    case HTTP_PUT:
+      methodName = "PUT";
+      break;
+    case HTTP_PATCH:
+      methodName = "PATCH";
+      break;
+    case HTTP_DELETE:
+      methodName = "DELETE";
+      break;
+    default:
+      methodName = "UNKNOWN";
+      break;
+    }
+    jsonBodyReqData[request->url()][methodName] = doc;
+  }
+}
+
+void onFileUpload(AsyncWebServerRequest *request, const String &filename, size_t index, uint8_t *data, size_t len, bool final)
+{
+  if (index == 0)
   {
-    request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
+    Serial.printf("UploadStart: %s\n", filename.c_str());
+    // Here, you could open a file to save the uploaded data
   }
 
-  String cronExpression = doc["cron"];
+  Serial.printf("Received %u bytes\n", len);
 
-  int pin = doc["pin"].as<int>();
-  String mode = doc["mode"];
-  int value = doc["value"].as<int>();
+  // Here, you could write the received data to a file
 
-  createCronJob((char *)cronExpression.c_str());
-  // trysetpin
-  if (mode == "analogInput")
+  if (final)
   {
-    jsonData["cron"][cronExpression][String(pin)]["mode"] = "analogInput";
-    jsonData["cron"][cronExpression][String(pin)]["value"] = value;
+    Serial.printf("UploadEnd: %s, %u B\n", filename.c_str(), index + len);
+    // Here, you could close the file
   }
-  else if (mode == "digitalInput")
-  {
-    jsonData["cron"][cronExpression][String(pin)]["mode"] = "digitalInput";
-    jsonData["cron"][cronExpression][String(pin)]["value"] = value;
-  }
-  else if (mode == "digitalOutput")
-  {
-    jsonData["cron"][cronExpression][String(pin)]["mode"] = "digitalOutput";
-    jsonData["cron"][cronExpression][String(pin)]["value"] = value;
-  }
-  else if (mode == "pwmOutput")
-  {
-    jsonData["cron"][cronExpression][String(pin)]["mode"] = "pwmOutput";
-    jsonData["cron"][cronExpression][String(pin)]["value"] = value;
-  }
-  else
-  {
-    request->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
-    return;
-  }
-
-  request->send(200, "application/json", "{\"message\": \"Task created\", \"id\": \"1\"}");
 }
 
 void handleCronRequest(AsyncWebServerRequest *request)
 {
-  // This is the initial handler, usually used for parameter validation
-  // or for tasks that don’t require access to the body.
-  // No body is processed here, so just exit this handler.
+  
+  String cronExpression = jsonBodyReqData[request->url()][request->method()]["cron"];
+
+  createCronJob((char *)cronExpression.c_str());
+
+  request->send(200, "application/json", "{\"message\": \"Task created\", \"id\": \"1\"}");
 }
 
 void start()
 {
 
   init();
-  server.on("/cron", HTTP_POST, handleCronRequest, NULL, processCronRequestBody);
+  server.on("/cron", HTTP_POST, handleCronRequest);
 
-  server.on("/cron", HTTP_DELETE, [](AsyncWebServerRequest *request) {}, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+  server.on("/cron", HTTP_DELETE, [](AsyncWebServerRequest *request)
             {
 
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, data);
-
-    if (error) {
-      request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-      return;
-    }
+              DynamicJsonDocument doc(512);
+              doc = jsonBodyReqData[request->url()][request->method()];
     
     serializeJson(doc, Serial);
     if (doc["cron"] == "") {
@@ -305,23 +321,6 @@ void start()
 
     request->send(200, "text/plain", "test"); });
 
-  server.on("/getall", HTTP_GET, [](AsyncWebServerRequest *request)
-            {
-              AsyncResponseStream *response = request->beginResponseStream("application/json");
-
-        //serializeJson(doc, *response);
-        request->send(response); });
-
-  server.on("/set-settings", HTTP_GET, [](AsyncWebServerRequest *request)
-            {
-        if (request->hasParam("ssid") && request->hasParam("password")) {
-            strcpy("esp32", request->getParam("ssid")->value().c_str());
-            strcpy("Password1", request->getParam("password")->value().c_str());
-            shouldReboot = true;
-        }
-
-        request->send(200, "text/plain", "saved"); });
-
   server.on("/reset", HTTP_GET, [](AsyncWebServerRequest *request)
             {
         String message;
@@ -332,17 +331,6 @@ void start()
         }        
         shouldReboot = true;
         request->send(200, "text/plain", message); });
-  // Route for root index.html
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/index.html", "text/html"); });
-
-  // Route for root index.css
-  server.on("/index.css", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/index.css", "text/css"); });
-
-  // Route for root index.js
-  server.on("/index.js", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/index.js", "text/javascript"); });
 
   server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest *request)
             {
@@ -377,29 +365,24 @@ void start()
   json = String(); });
 
   // Create (POST): Set pin state
-  server.on("/pin", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+  server.on("/pin", HTTP_POST, [](AsyncWebServerRequest *request)
             {
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, data);
+              DynamicJsonDocument doc(512);
+              doc = jsonBodyReqData[request->url()][request->method()];
+              serializeJson(doc, Serial);
+              int pin = doc["pin"].as<int>();
+              String mode = doc["mode"];
+              int value = doc["value"].as<int>();
 
-    if (error) {
-      request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-      return;
-    }
-    
-    serializeJson(doc, Serial);
-    int pin = doc["pin"].as<int>();
-    String mode = doc["mode"];
-    int value = doc["value"].as<int>();
-
-    if (trySetPin(doc["pin"].as<String>(), mode, value)) {
-      request->send(200, "application/json", "{\"status\":\"pin set\"}");
-    } else {
-      request->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
-      return;
-    }
-
-   });
+              if (trySetPin(doc["pin"].as<String>(), mode, value))
+              {
+                request->send(200, "application/json", "{\"status\":\"pin set\"}");
+              }
+              else
+              {
+                request->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
+                return;
+              } });
 
   // Read (GET): Get current pin states
   server.on("/pin", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -409,73 +392,43 @@ void start()
     request->send(200, "application/json", jsonStr); });
 
   // Update (PUT): Update pin state
-  server.on("/pin", HTTP_PUT, [](AsyncWebServerRequest *request) {}, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+  server.on("/pin", HTTP_PUT, [](AsyncWebServerRequest *request)
             {
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, data);
+              DynamicJsonDocument doc(512);
+              doc = jsonBodyReqData[request->url()][request->method()];
+                            int pin = doc["pin"].as<int>();
+              String mode = doc["mode"];
+              int value = doc["value"].as<int>();
 
-    if (error) {
-      request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-      return;
-    }
+              if (trySetPin(doc["pin"].as<String>(), mode, value))
+              {
+                request->send(200, "application/json", "{\"status\":\"pin set\"}");
+              }
+              else
+              {
+                request->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
+                return;
+              } });
 
-    int pin = doc["pin"].as<int>();
-    String mode = doc["mode"];
-    int value = doc["value"].as<int>();
-
-    if (trySetPin(doc["pin"].as<String>(), mode, value)) {
-      request->send(200, "application/json", "{\"status\":\"pin set\"}");
-    } else {
-      request->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
-      return;
-    }
-
- });
-
-  // Delete (DELETE): Reset pin state
-  server.on("/pin", HTTP_DELETE, [](AsyncWebServerRequest *request) {}, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+  server.on("/pin", HTTP_DELETE, [](AsyncWebServerRequest *request)
             {
 
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, data);
-
-    if (error) {
-      request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-      return;
-    }
-    
+              DynamicJsonDocument doc(512);
+              doc = jsonBodyReqData[request->url()][request->method()];
     serializeJson(doc, Serial);
     if (doc["pin"] != "") {
       int pin = doc["pin"].as<int>();
       jsonData["pins"].remove(doc["pin"].as<String>());
-      pinMode(pin, INPUT);  // Reset pin to default state
+      pinMode(pin, INPUT);
       request->send(200, "application/json", "{\"status\":\"pin reset\"}");
     } else {
       request->send(400, "application/json", "{\"error\":\"No pin specified\"}");
     } });
 
-  // Get all pins state
-  server.on("/getAllPins", HTTP_GET, [](AsyncWebServerRequest *request)
-            {
-    for (JsonPair kv : jsonData["pins"].as<JsonObject>()) {
-      const char* key = kv.key().c_str();
-      int pin = atoi(key);
-      const char* mode = kv.value()["mode"];
-
-      if (strcmp(mode, "analogInput") == 0) {
-        jsonData["pins"][key]["value"] = analogRead(pin);
-      } else if (strcmp(mode, "digitalInput") == 0) {
-        jsonData["pins"][key]["value"] = digitalRead(pin);
-      }
-    }
-
-    String jsonStr;
-    serializeJson(jsonData, jsonStr);
-    request->send(200, "application/json", jsonStr); });
   server.serveStatic("/", LittleFS, "/static/").setDefaultFile("index.html");
-
+  server.onFileUpload(onFileUpload);
+  server.onRequestBody(onRequestBody);
   server.onNotFound(notFound);
-
   server.begin();
 }
 
